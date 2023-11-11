@@ -296,7 +296,7 @@ func genEnum(g *protogen.GeneratedFile, f *fileInfo, e *enumInfo) {
 	genEnumReflectMethods(g, f, e)
 
 	// UnmarshalJSON method.
-	if e.genJSONMethod && e.Desc.Syntax() == protoreflect.Proto2 {
+	if e.genJSONMethod {
 		g.P("// Deprecated: Do not use.")
 		g.P("func (x *", e.GoIdent, ") UnmarshalJSON(b []byte) error {")
 		g.P("num, err := ", protoimplPackage.Ident("X"), ".UnmarshalJSONEnum(x.Descriptor(), b)")
@@ -359,10 +359,6 @@ func genEnum(g *protogen.GeneratedFile, f *fileInfo, e *enumInfo) {
 }
 
 func genMessage(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
-	if m.Desc.IsMapEntry() {
-		return
-	}
-
 	// Message type declaration.
 	g.Annotate(m.GoIdent.GoName, m.Location)
 	leadingComments := appendDeprecationSuffix(m.Comments.Leading,
@@ -378,6 +374,45 @@ func genMessage(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
 	genMessageDefaultDecls(g, f, m)
 	genMessageMethods(g, f, m)
 	genMessageOneofWrapperTypes(g, f, m)
+
+	// Generate a method for easy conversion of maps from legacy _MapEntry
+	// structures.
+	if m.Desc.IsMapEntry() {
+		// Figure out the Go types and tags for the key and value types.
+		keyField, valField := m.Fields[0], m.Fields[1]
+
+		keyType, keyIsPointer := fieldGoType(g, f, keyField)
+		valType, _ := fieldGoType(g, f, valField)
+
+		// We don't use stars, except for message-typed values.
+		if valField.Desc.Kind() != protoreflect.MessageKind {
+			valType = strings.TrimPrefix(valType, "*")
+		}
+
+		mapTypename := fmt.Sprintf("map[%s]%s", strings.TrimPrefix(keyType, "*"),
+			valType)
+
+		g.P("func ", m.GoIdent, "_ToMap(l []*", m.GoIdent, ") ", mapTypename,
+			"{")
+
+		g.P("result := make(", mapTypename, ")")
+		g.P("for _, entry := range l {")
+		g.P("if l != nil {")
+
+		var entryKeyAccessorStr string
+		if keyIsPointer || strings.HasPrefix(keyType, "*") {
+			entryKeyAccessorStr = "result[entry.GetKey()]"
+		} else {
+			entryKeyAccessorStr = "result[entry.Key]"
+		}
+
+		g.P(entryKeyAccessorStr, " = entry.GetValue()")
+
+		g.P("}}")
+
+		g.P("return result")
+		g.P("}")
+	}
 }
 
 func genMessageFields(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
