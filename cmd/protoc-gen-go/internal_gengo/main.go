@@ -722,6 +722,22 @@ func genMessageGetterMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageI
 			g.P("}")
 			g.P("return ", defaultValue)
 			g.P("}")
+
+			// Generate a method of form Get<one_of_field>Ptr as a convenient method
+			// to check for presence.
+			if defaultValue != "nil" {
+				g.P("func (m *", m.GoIdent, ") Get", field.GoName, "Ptr () *",
+					goType, "{")
+				g.P("if m == nil { return nil }")
+
+				g.P("if x, ok := m.Get", field.Oneof.GoName, "().(*", field.GoIdent,
+					"); ok {")
+				g.P("return &x.", field.GoName)
+				g.P("}")
+				g.P("return nil")
+				g.P("}")
+			}
+
 		default:
 			g.P(leadingComments, "func (x *", m.GoIdent, ") Get", field.GoName, "() ", goType, " {")
 			if !field.Desc.HasPresence() || defaultValue == "nil" {
