@@ -44,7 +44,9 @@ const (
 	syncPackage    = protogen.GoImportPath("sync")
 	timePackage    = protogen.GoImportPath("time")
 	utf8Package    = protogen.GoImportPath("unicode/utf8")
-	jsonPackage    = protogen.GoImportPath("json")
+	jsonPackage    = protogen.GoImportPath("encoding/json")
+	fmtPackage     = protogen.GoImportPath("fmt")
+	errorsPackage  = protogen.GoImportPath("errors")
 
 	// The old style proto lib for json backwards compatibility.
 	oldProtoLibPackage = protogen.GoImportPath("oldcode.google.com/"+
@@ -319,6 +321,40 @@ func genEnum(g *protogen.GeneratedFile, f *fileInfo, e *enumInfo) {
 		g.P("}")
 		g.P()
 		f.needRawDesc = true
+	}
+
+	// We want to generate MarshalJSON if comments contain following tag
+	// "enum: ". go-protobuf does not generate MarshalJSON for enum. Therefore,
+	// enum values get marshalled into int32 (which is the type for the enum).
+	// In order to marshal values into readable string, we need to generate
+	// MarshalJSON function.  However, we don't want to do it unconditionally in
+	// order to maintain backward compatibility until older code is migrated.
+
+	// Get comments.
+	lastCommentLine := ""
+
+	isEnumTagPresentInComments := func() bool {
+		comments := strings.Split(
+			strings.TrimSuffix(string(e.Comments.Leading), "\n"), "\n")
+		if len(comments) == 0 {
+			return false
+		}
+
+		lastCommentLine = comments[len(comments)-1]
+		return strings.Contains(lastCommentLine, "enum:")
+	}()
+
+	// If comments contain enum: tag, generate MarshalJSON.
+	if isEnumTagPresentInComments {
+		g.P("func (x *", e.GoIdent, ") MarshalJSON()([]byte, error) {")
+		g.P("if enumStr, valid := ", e.GoIdent, "_name[int32(*x)]; valid {")
+		g.P("return ", jsonPackage.Ident("Marshal"), "(enumStr)")
+		g.P("}")
+		g.P("return nil,", errorsPackage.Ident("New"), "(",
+			fmtPackage.Ident("Sprintf"), "(\"Unknown ",
+			e.GoIdent,
+			" Type %d\", int32(*x)))")
+		g.P("}")
 	}
 }
 
@@ -787,8 +823,18 @@ func fieldDefaultValue(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo, f
 	}
 }
 
+// makeFirstLetterLowerCase makes the first letter of the string as lowercase.
+func makeFirstLetterLowerCase(str string) string {
+	runes := []rune(str)
+	if len(runes) > 0 {
+		runes[0] = unicode.ToLower(runes[0])
+		return string(runes)
+	}
+	return str
+}
+
 func fieldJSONTagValue(field *protogen.Field) string {
-	return string(field.Desc.Name()) + ",omitempty"
+	return makeFirstLetterLowerCase(string(field.Desc.Name())) + ",omitempty"
 }
 
 func genExtensions(g *protogen.GeneratedFile, f *fileInfo) {
