@@ -117,6 +117,9 @@ type Plugin struct {
 	genFiles       []*GeneratedFile
 	opts           Options
 	err            error
+
+	// Generate code for JS compatibility with old goprotobuf.
+	generateOldProtoCompat bool
 }
 
 type Options struct {
@@ -191,6 +194,11 @@ func (opts Options) New(req *pluginpb.CodeGeneratorRequest) (*Plugin, error) {
 			case "false":
 			default:
 				return nil, fmt.Errorf(`bad value for parameter %q: want "true" or "false"`, param)
+			}
+
+		case "oldproto_compat":
+			if value == "true" {
+				gen.generateOldProtoCompat = true
 			}
 		default:
 			if param[0] == 'M' {

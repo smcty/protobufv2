@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"math"
+	"path"
 	"strconv"
 	"strings"
 	"unicode"
@@ -43,6 +44,11 @@ const (
 	syncPackage    = protogen.GoImportPath("sync")
 	timePackage    = protogen.GoImportPath("time")
 	utf8Package    = protogen.GoImportPath("unicode/utf8")
+	jsonPackage    = protogen.GoImportPath("json")
+
+	// The old style proto lib for json backwards compatibility.
+	oldProtoLibPackage = protogen.GoImportPath("oldcode.google.com/"+
+		"p/goprotobuf/proto")
 )
 
 // Protobuf library dependencies.
@@ -504,6 +510,19 @@ func genMessageMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
 	genMessageSetterMethods(g, f, m)
 }
 
+// InferPackagePathForOldStyleProto constructs package path for the
+// old style generated code for this protobuf. Our build system is
+// configured to generate these old style protos at this path.
+func InferPackagePathForOldStyleProto(f *fileInfo) string {
+	fileDesc := f.Desc
+	name := fileDesc.Path()
+	if ext := path.Ext(name); ext == ".proto" || ext == ".protodevel" {
+		name = name[:len(name)-len(ext)]
+	}
+	// Old protos are in a directory matching the proto file's relative path.
+	return name + ".pb.old"
+}
+
 func genMessageBaseMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageInfo) {
 	// Reset method.
 	g.P("func (x *", m.GoIdent, ") Reset() {")
@@ -525,6 +544,52 @@ func genMessageBaseMethods(g *protogen.GeneratedFile, f *fileInfo, m *messageInf
 	// ProtoMessage method.
 	g.P("func (*", m.GoIdent, ") ProtoMessage() {}")
 	g.P()
+
+	hasOneOfOrMapField := func() bool {
+		for _, nested := range m.Messages {
+			if nested.Desc.IsMapEntry() {
+				return true
+			}
+		}
+
+		for _, field := range m.Fields {
+			if field.Desc.ContainingOneof() != nil {
+				return true
+			}
+		}
+		return false
+	}()
+
+	if hasOneOfOrMapField {
+		// g.foundMessagesWithMapsOrOneOf = true
+
+		oldstylePackage := protogen.GoImportPath(
+			InferPackagePathForOldStyleProto(f))
+
+		g.P("// Custom MarshalJson and UnmarshalJson methods to preserve")
+		g.P("// compatibility with old style protobufs. This is done only ")
+		g.P("// for messages with one_of or map fields, and protos that ")
+		g.P("// that existed before goprotobuf upgrade.")
+		g.P("func (x *", m.GoIdent, ") MarshalJSON()([]byte, error) {")
+		g.P("binaryData, err := ", protoPackage.Ident("Marshal"), "(x)")
+		g.P("if err != nil { return nil, err }")
+		g.P("oldMsg := &", oldstylePackage.Ident(m.GoIdent.GoName), "{}")
+		g.P("err = ", oldProtoLibPackage.Ident("Unmarshal"), "(binaryData, " +
+			"oldMsg)")
+		g.P("if err != nil { return nil, err }")
+		g.P("return ", jsonPackage.Ident("Marshal"), "(oldMsg)")
+		g.P("}")
+
+		g.P("func (x *", m.GoIdent, ") UnmarshalJSON(data []byte) error {")
+		g.P("oldMsg := &", oldstylePackage.Ident(m.GoIdent.GoName), "{}")
+		g.P("err := ", jsonPackage.Ident("Unmarshal"), "(data, oldMsg)")
+		g.P("if err != nil { return err }")
+		g.P("binaryData, err := ", oldProtoLibPackage.Ident("Marshal"), "(oldMsg)")
+		g.P("if err != nil { return err }")
+		g.P("err = ", protoPackage.Ident("Unmarshal"), "(binaryData, x)")
+		g.P("return err")
+		g.P("}")
+	}
 
 	// ProtoReflect method.
 	genMessageReflectMethods(g, f, m)
